@@ -202,8 +202,15 @@ export class BLEPrinter {
     this.ctx.font = `${fontSize}px Arial`;
     this.ctx.textBaseline = 'top';
     
-    // Draw each line centered horizontally with minimal spacing
-    let y = 2; // Start after top line
+    // Calculate total text height
+    const totalTextHeight = lines.length * fontSize;
+    
+    // Calculate starting Y position for vertical centering between the lines
+    const availableHeight = height - 4; // Account for 2px lines at top and bottom
+    const startY = 2 + Math.floor((availableHeight - totalTextHeight) / 2);
+    
+    // Draw each line centered horizontally
+    let y = startY;
     lines.forEach(line => {
       const metrics = this.ctx.measureText(line);
       const x = (this.PRINTER_WIDTH - metrics.width) / 2;
