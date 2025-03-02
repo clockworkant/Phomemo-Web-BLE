@@ -7,7 +7,8 @@ const PrinterConnect = () => {
   const [isConnected, setIsConnected] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [text, setText] = useState('');
-  const [height, setHeight] = useState(384); // Default height
+  const [height, setHeight] = useState('384');
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
   const connect = async () => {
     setIsLoading(true);
@@ -24,6 +25,16 @@ const PrinterConnect = () => {
   const disconnect = async () => {
     await printer.disconnect();
     setIsConnected(false);
+    setPreviewUrl(null);
+  };
+
+  const updatePreview = () => {
+    if (!text.trim()) {
+      setPreviewUrl(null);
+      return;
+    }
+    const preview = printer.getPreview(text, parseInt(height) || 384);
+    setPreviewUrl(preview);
   };
 
   const printText = async () => {
@@ -31,8 +42,9 @@ const PrinterConnect = () => {
     
     setIsLoading(true);
     try {
-      await printer.printText(text, height);
+      await printer.printText(text, parseInt(height) || 384);
       setText(''); // Clear the input after successful print
+      setPreviewUrl(null);
     } catch (error) {
       console.error('Failed to print:', error);
     } finally {
@@ -76,22 +88,34 @@ const PrinterConnect = () => {
                 <label htmlFor="height">Height (px):</label>
                 <input
                   id="height"
-                  type="number"
-                  min="0"
-                  max="800"
+                  type="text"
                   value={height}
-                  onChange={(e) => setHeight(Math.max(0, Math.min(800, parseInt(e.target.value) || 384)))}
+                  onChange={(e) => setHeight(e.target.value)}
                   disabled={isLoading}
                 />
               </div>
-              <button 
-                onClick={printText} 
-                disabled={isLoading || !text.trim()}
-                className="print-btn"
-              >
-                {isLoading ? 'Printing...' : 'Print Text'}
-              </button>
+              <div className="button-group">
+                <button 
+                  onClick={updatePreview}
+                  disabled={isLoading || !text.trim()}
+                  className="preview-btn"
+                >
+                  Preview
+                </button>
+                <button 
+                  onClick={printText} 
+                  disabled={isLoading || !text.trim()}
+                  className="print-btn"
+                >
+                  {isLoading ? 'Printing...' : 'Print Text'}
+                </button>
+              </div>
             </div>
+            {previewUrl && (
+              <div className="preview">
+                <img src={previewUrl} alt="Print preview" style={{ width: '100%' }} />
+              </div>
+            )}
             <div className="action-buttons">
               <button 
                 onClick={feedPaper} 

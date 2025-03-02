@@ -145,6 +145,22 @@ button:disabled {
   cursor: not-allowed;
 }
 
+.button-group {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.preview-btn {
+  background-color: #4b5563;
+  color: white;
+  flex: 1;
+}
+
+.preview-btn:hover:not(:disabled) {
+  background-color: #374151;
+}
+
 .error-message {
   color: var(--error-color);
   margin-top: 0.5rem;
@@ -169,4 +185,18 @@ button:disabled {
   border: 1px solid #ccc;
   border-radius: 4px;
   font-size: 14px;
+}
+
+.preview {
+  margin: 20px 0;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  overflow: hidden;
+  background: #f5f5f5;
+}
+
+.preview img {
+  display: block;
+  max-width: 100%;
+  height: auto;
 }
