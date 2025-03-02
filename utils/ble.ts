@@ -21,17 +21,28 @@ const CHUNK_SIZE = 512; // Maximum BLE packet size
 const RETRY_ATTEMPTS = 3;
 const RETRY_DELAY = 1000; // 1 second
 
+export interface TextStyle {
+  fontFamily: string;
+  bold: boolean;
+  italic: boolean;
+  underline: boolean;
+  fontSize?: number;
+}
+
 export class BLEPrinter {
   private device: BluetoothDevice | null = null;
   private characteristic: BluetoothRemoteGATTCharacteristic | null = null;
   private readonly PRINTER_WIDTH = 384; // T02 printer width in pixels
+  private readonly SERVICE_UUID = '49535343-FE7D-4AE5-8FA9-9FAFD205E455';
+  private readonly CHARACTERISTIC_UUID = '49535343-8841-43F4-A8D4-ECBE34729BB3';
   private canvas: HTMLCanvasElement | null = null;
   private ctx: CanvasRenderingContext2D | null = null;
 
   constructor() {
-    // Create canvas once and set willReadFrequently
-    this.canvas = document.createElement('canvas');
-    this.ctx = this.canvas.getContext('2d', { willReadFrequently: true });
+    if (typeof window !== 'undefined') {
+      this.canvas = document.createElement('canvas');
+      this.ctx = this.canvas.getContext('2d', { willReadFrequently: true });
+    }
   }
 
   async connect() {
@@ -112,76 +123,7 @@ export class BLEPrinter {
     }
   }
 
-  private calculateOptimalFontSize(text: string, maxWidth: number, maxHeight: number): { fontSize: number, lines: string[] } {
-    if (!this.ctx) throw new Error('Canvas context not initialized');
-    
-    const words = text.split(' ');
-    let fontSize = 8; // Start with minimum font size
-    let bestFontSize = fontSize;
-    let bestLines: string[] = [];
-    
-    // Binary search for optimal font size
-    let min = 8;
-    let max = 200; // Increased maximum font size
-    
-    while (min <= max) {
-      fontSize = Math.floor((min + max) / 2);
-      this.ctx.font = `${fontSize}px Arial`;
-      
-      const lines: string[] = [];
-      let currentLine = '';
-      let maxLineWidth = 0;
-      let foundTooLongWord = false;
-      
-      // Try to fit text with current font size
-      for (const word of words) {
-        const testLine = currentLine + (currentLine ? ' ' : '') + word;
-        const metrics = this.ctx.measureText(testLine);
-        
-        if (metrics.width > maxWidth) {
-          if (currentLine === '') {
-            // Single word too long
-            console.log('Word too long:', word, 'at font size:', fontSize, 'width:', metrics.width, 'max width:', maxWidth);
-            max = fontSize - 1;
-            foundTooLongWord = true;
-            break;
-          }
-          lines.push(currentLine);
-          maxLineWidth = Math.max(maxLineWidth, this.ctx.measureText(currentLine).width);
-          currentLine = word;
-        } else {
-          currentLine = testLine;
-        }
-      }
-      
-      if (foundTooLongWord) {
-        continue;
-      }
-      
-      if (currentLine !== '') {
-        lines.push(currentLine);
-        maxLineWidth = Math.max(maxLineWidth, this.ctx.measureText(currentLine).width);
-      }
-      
-      // Check if text fits within constraints
-      const totalHeight = lines.length * fontSize;
-      
-      if (totalHeight <= maxHeight && maxLineWidth <= maxWidth) {
-        console.log('Found valid size:', fontSize, 'for lines:', lines);
-        bestFontSize = fontSize;
-        bestLines = lines;
-        min = fontSize + 1;
-      } else {
-        console.log('Text too big at size:', fontSize, 'height:', totalHeight, 'max height:', maxHeight);
-        max = fontSize - 1;
-      }
-    }
-    
-    console.log('Final result:', { fontSize: bestFontSize, lines: bestLines });
-    return { fontSize: bestFontSize, lines: bestLines };
-  }
-
-  private renderText(text: string, height: number, preview = false): HTMLCanvasElement {
+  private renderText(text: string, height: number, preview = false, style: TextStyle): HTMLCanvasElement {
     if (!this.canvas || !this.ctx) {
       throw new Error('Canvas context not initialized');
     }
@@ -190,32 +132,126 @@ export class BLEPrinter {
     this.canvas.width = this.PRINTER_WIDTH;
     this.canvas.height = height;
     
-    // Clear canvas
+    // Clear canvas with white
     this.ctx.fillStyle = 'white';
     this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
     
-    // Calculate optimal font size and line breaks
-    const { fontSize, lines } = this.calculateOptimalFontSize(text, this.PRINTER_WIDTH, height - 4); // Account for 2px lines
+    // Build font string
+    const getFontString = (size: number) => [
+      style.italic ? 'italic' : '',
+      style.bold ? 'bold' : '',
+      `${size}px`,
+      style.fontFamily
+    ].filter(Boolean).join(' ');
     
-    // Configure text rendering
+    // Split text into lines
+    const words = text.split(' ');
+    const lines: string[] = [];
+    
+    // Use provided font size or find the largest that fits
+    let fontSize = style.fontSize || height;
+    
+    // If no font size provided, do binary search
+    if (!style.fontSize) {
+      let minSize = 8;
+      let maxSize = height;
+      let bestFontSize = minSize;
+      
+      while (minSize <= maxSize) {
+        fontSize = Math.floor((minSize + maxSize) / 2);
+        this.ctx.font = getFontString(fontSize);
+        
+        // Try to form lines with current font size
+        let currentLine = '';
+        const currentLines = [];
+        let fitsWidth = true;
+        
+        for (const word of words) {
+          const testLine = currentLine + (currentLine ? ' ' : '') + word;
+          const metrics = this.ctx.measureText(testLine);
+          
+          if (metrics.width > this.PRINTER_WIDTH) {
+            if (currentLine === '') {
+              fitsWidth = false;
+              break;
+            }
+            currentLines.push(currentLine);
+            currentLine = word;
+          } else {
+            currentLine = testLine;
+          }
+        }
+        
+        if (!fitsWidth) {
+          maxSize = fontSize - 1;
+          continue;
+        }
+        
+        if (currentLine) {
+          currentLines.push(currentLine);
+        }
+        
+        const totalHeight = currentLines.length * fontSize;
+        
+        if (totalHeight <= height) {
+          bestFontSize = fontSize;
+          minSize = fontSize + 1;
+        } else {
+          maxSize = fontSize - 1;
+        }
+      }
+      
+      fontSize = bestFontSize;
+    }
+    
+    // Set final font
+    this.ctx.font = getFontString(fontSize);
+    
+    // Form final lines
+    let currentLine = '';
+    for (const word of words) {
+      const testLine = currentLine + (currentLine ? ' ' : '') + word;
+      const metrics = this.ctx.measureText(testLine);
+      
+      if (metrics.width > this.PRINTER_WIDTH) {
+        if (currentLine) {
+          lines.push(currentLine);
+          currentLine = word;
+        } else {
+          // Force break long word
+          lines.push(word);
+          currentLine = '';
+        }
+      } else {
+        currentLine = testLine;
+      }
+    }
+    if (currentLine) {
+      lines.push(currentLine);
+    }
+    
+    // Draw lines
     this.ctx.fillStyle = 'black';
-    this.ctx.font = `${fontSize}px Arial`;
-    this.ctx.textBaseline = 'top';
+    const totalHeight = lines.length * fontSize;
+    const startY = (height - totalHeight) / 2 + fontSize;
     
-    // Calculate total text height
-    const totalTextHeight = lines.length * fontSize;
-    
-    // Calculate starting Y position for vertical centering between the lines
-    const availableHeight = height - 4; // Account for 2px lines at top and bottom
-    const startY = 2 + Math.floor((availableHeight - totalTextHeight) / 2);
-    
-    // Draw each line centered horizontally
-    let y = startY;
-    lines.forEach(line => {
+    lines.forEach((line, index) => {
       const metrics = this.ctx.measureText(line);
       const x = (this.PRINTER_WIDTH - metrics.width) / 2;
+      const y = startY + (index * fontSize);
+      
+      // Draw text
       this.ctx.fillText(line, x, y);
-      y += fontSize;
+      
+      // Draw underline if enabled
+      if (style.underline) {
+        const underlineY = y + 3;
+        this.ctx.beginPath();
+        this.ctx.moveTo(x, underlineY);
+        this.ctx.lineTo(x + metrics.width, underlineY);
+        this.ctx.lineWidth = 1;
+        this.ctx.stroke();
+      }
     });
 
     if (!preview) {
@@ -252,41 +288,14 @@ export class BLEPrinter {
     return this.canvas;
   }
 
-  async printText(text: string, height: number) {
-    try {
-      // Render the text
-      const canvas = this.renderText(text, height);
-      
-      // Convert to bitmap data
-      const bitmap = this.canvasToBitmap();
-      
-      // Send PeriPage/T02 specific commands
-      await this.sendCommand(COMMANDS.START_PRINT);
-      await this.sendCommand(COMMANDS.PADDING);
-
-      // Calculate width in bytes (round up to nearest byte)
-      const widthInBytes = Math.ceil(this.canvas.width / 8);
-      
-      // Send bitmap header
-      const header = new Uint8Array([
-        ...COMMANDS.BITMAP_MODE,
-        widthInBytes, 0x00, // width in bytes, little endian
-        this.canvas.height & 0xff, (this.canvas.height >> 8) & 0xff // height, little endian
-      ]);
-
-      await this.sendCommand(header);
-      await this.sendCommand(bitmap);
-      await this.feedPaper();
-
-    } catch (error) {
-      console.error('Error printing text:', error);
-      throw error;
-    }
+  public getPreview(text: string, height: number, style: TextStyle): string {
+    const canvas = this.renderText(text, height, true, style);
+    return canvas.toDataURL('image/png');
   }
 
-  getPreview(text: string, height: number): string {
-    const canvas = this.renderText(text, height, true);
-    return canvas.toDataURL('image/png');
+  public async printText(text: string, height: number, style: TextStyle): Promise<void> {
+    const canvas = this.renderText(text, height, false, style);
+    await this.printCanvas(canvas);
   }
 
   private floydSteinbergDither(imageData: ImageData): ImageData {
@@ -390,6 +399,35 @@ export class BLEPrinter {
 
   isConnected(): boolean {
     return this.device?.gatt?.connected ?? false;
+  }
+
+  private async printCanvas(canvas: HTMLCanvasElement): Promise<void> {
+    try {
+      // Convert to bitmap data
+      const bitmap = this.canvasToBitmap();
+      
+      // Send PeriPage/T02 specific commands
+      await this.sendCommand(COMMANDS.START_PRINT);
+      await this.sendCommand(COMMANDS.PADDING);
+
+      // Calculate width in bytes (round up to nearest byte)
+      const widthInBytes = Math.ceil(this.canvas.width / 8);
+      
+      // Send bitmap header
+      const header = new Uint8Array([
+        ...COMMANDS.BITMAP_MODE,
+        widthInBytes, 0x00, // width in bytes, little endian
+        this.canvas.height & 0xff, (this.canvas.height >> 8) & 0xff // height, little endian
+      ]);
+
+      await this.sendCommand(header);
+      await this.sendCommand(bitmap);
+      await this.feedPaper();
+
+    } catch (error) {
+      console.error('Error printing canvas:', error);
+      throw error;
+    }
   }
 }
 
