@@ -1,0 +1,292 @@
+// T02 Service and Characteristic UUIDs
+const T02 = {
+  SERVICE: 0xff00,
+  NOTIFY1: 0xff01,
+  WRITE: 0xff02,
+  NOTIFY2: 0xff03
+};
+
+// ESC/POS Commands for thermal printers
+const COMMANDS = {
+  INIT: new Uint8Array([0x1B, 0x40]), // ESC @ Initialize printer
+  FEED_PAPER: new Uint8Array([0x1B, 0x64, 0x01]), // ESC d 1 - Feed paper 1 line
+  FEED_AND_CUT: new Uint8Array([0x1D, 0x56, 0x42, 0x00]), // GS V B 0 - Feed and cut paper
+  // PeriPage specific commands
+  START_PRINT: new Uint8Array([0x10, 0xff, 0xfe, 0x01]), // Start print command
+  PADDING: new Uint8Array(12), // 12 zeros padding
+  BITMAP_MODE: new Uint8Array([0x1d, 0x76, 0x30, 0x00]) // GS v 0 - Print raster bit image
+};
+
+const CHUNK_SIZE = 512; // Maximum BLE packet size
+const RETRY_ATTEMPTS = 3;
+const RETRY_DELAY = 1000; // 1 second
+
+export class BLEPrinter {
+  private device: BluetoothDevice | null = null;
+  private characteristic: BluetoothRemoteGATTCharacteristic | null = null;
+  private readonly PRINTER_WIDTH = 384; // T02 printer width in pixels
+  private canvas: HTMLCanvasElement | null = null;
+  private ctx: CanvasRenderingContext2D | null = null;
+
+  constructor() {
+    // Create canvas once and set willReadFrequently
+    this.canvas = document.createElement('canvas');
+    this.ctx = this.canvas.getContext('2d', { willReadFrequently: true });
+  }
+
+  async connect() {
+    try {
+      // Request T02 device with specific service
+      this.device = await navigator.bluetooth.requestDevice({
+        filters: [
+          { namePrefix: 'T02' }
+        ],
+        optionalServices: [T02.SERVICE]
+      });
+
+      if (!this.device) {
+        throw new Error('No device selected');
+      }
+
+      await this.ensureConnected();
+      console.log('Connected to printer');
+      return true;
+    } catch (error) {
+      console.error('Error connecting to printer:', error);
+      throw error;
+    }
+  }
+
+  private async ensureConnected() {
+    if (!this.device) {
+      throw new Error('No device selected');
+    }
+
+    if (!this.device.gatt?.connected) {
+      console.log('Connecting to GATT Server...');
+      const server = await this.device.gatt.connect();
+      
+      // Get the FF00 service
+      console.log('Getting printer service...');
+      const service = await server.getPrimaryService(T02.SERVICE);
+      
+      // Get all characteristics
+      const characteristics = await service.getCharacteristics();
+      console.log('Available characteristics:', characteristics.map(c => c.uuid));
+      
+      // Find FF02 characteristic for writing
+      const writableChar = characteristics.find(c => c.uuid.includes('ff02'));
+      if (!writableChar) {
+        throw new Error('No writable characteristic found');
+      }
+
+      this.characteristic = writableChar;
+      
+      // Initialize printer
+      await this.sendCommand(COMMANDS.INIT);
+    }
+  }
+
+  private async sendCommand(command: Uint8Array, retryCount = 0): Promise<void> {
+    try {
+      await this.ensureConnected();
+
+      if (!this.characteristic) {
+        throw new Error('No writable characteristic found');
+      }
+
+      // Split data into chunks if needed
+      for (let i = 0; i < command.length; i += CHUNK_SIZE) {
+        const chunk = command.slice(i, i + CHUNK_SIZE);
+        await this.characteristic.writeValueWithoutResponse(chunk);
+        // Small delay between chunks
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+    } catch (error) {
+      if (retryCount < RETRY_ATTEMPTS) {
+        console.log(`Retrying command... (attempt ${retryCount + 1})`);
+        await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
+        return this.sendCommand(command, retryCount + 1);
+      }
+      throw error;
+    }
+  }
+
+  async printText(text: string) {
+    try {
+      if (!this.canvas || !this.ctx) {
+        throw new Error('Canvas context not initialized');
+      }
+
+      // Set canvas size and font
+      this.canvas.width = this.PRINTER_WIDTH;
+      this.canvas.height = 100; // Temporary height, will adjust based on text
+      this.ctx.fillStyle = 'white';
+      this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+      
+      // Configure text rendering
+      this.ctx.fillStyle = 'black';
+      this.ctx.font = '24px Arial';
+      this.ctx.textBaseline = 'top';
+
+      // Measure and wrap text
+      const words = text.split(' ');
+      let line = '';
+      let y = 10;
+      const lineHeight = 30;
+
+      for (const word of words) {
+        const testLine = line + (line ? ' ' : '') + word;
+        const metrics = this.ctx.measureText(testLine);
+        if (metrics.width > this.canvas.width - 20) {
+          this.ctx.fillText(line, 10, y);
+          line = word;
+          y += lineHeight;
+        } else {
+          line = testLine;
+        }
+      }
+      this.ctx.fillText(line, 10, y);
+      y += lineHeight + 10;
+
+      // Resize canvas to actual height needed
+      const imageData = this.ctx.getImageData(0, 0, this.canvas.width, y);
+      this.canvas.height = y;
+      this.ctx.putImageData(imageData, 0, 0);
+
+      // Apply Floyd-Steinberg dithering
+      const ditheredData = this.floydSteinbergDither(imageData);
+      this.ctx.putImageData(ditheredData, 0, 0);
+
+      // Convert to bitmap data
+      const bitmap = this.canvasToBitmap();
+      
+      // Send PeriPage/T02 specific commands
+      await this.sendCommand(COMMANDS.START_PRINT);
+      await this.sendCommand(COMMANDS.PADDING);
+
+      // Calculate width in bytes (round up to nearest byte)
+      const widthInBytes = Math.ceil(this.canvas.width / 8);
+      
+      // Send bitmap header
+      const header = new Uint8Array([
+        ...COMMANDS.BITMAP_MODE,
+        widthInBytes, 0x00, // width in bytes, little endian
+        this.canvas.height & 0xff, (this.canvas.height >> 8) & 0xff // height, little endian
+      ]);
+
+      await this.sendCommand(header);
+      await this.sendCommand(bitmap);
+      await this.feedPaper();
+
+    } catch (error) {
+      console.error('Error printing text:', error);
+      throw error;
+    }
+  }
+
+  private floydSteinbergDither(imageData: ImageData): ImageData {
+    const width = imageData.width;
+    const height = imageData.height;
+    const data = new Uint8ClampedArray(imageData.data);
+    
+    const index = (x: number, y: number) => (y * width + x) * 4;
+    
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const i = index(x, y);
+        
+        // Get the grayscale value (assuming R=G=B)
+        const oldPixel = data[i];
+        // Convert to black or white
+        const newPixel = oldPixel < 128 ? 0 : 255;
+        
+        // Calculate the error
+        const error = oldPixel - newPixel;
+        
+        // Set the current pixel
+        data[i] = data[i + 1] = data[i + 2] = newPixel;
+        
+        // Distribute the error to neighboring pixels
+        if (x + 1 < width) {
+          data[i + 4] += error * 7 / 16;
+          data[i + 5] += error * 7 / 16;
+          data[i + 6] += error * 7 / 16;
+        }
+        if (y + 1 < height) {
+          if (x > 0) {
+            data[i + width * 4 - 4] += error * 3 / 16;
+            data[i + width * 4 - 3] += error * 3 / 16;
+            data[i + width * 4 - 2] += error * 3 / 16;
+          }
+          data[i + width * 4] += error * 5 / 16;
+          data[i + width * 4 + 1] += error * 5 / 16;
+          data[i + width * 4 + 2] += error * 5 / 16;
+          if (x + 1 < width) {
+            data[i + width * 4 + 4] += error * 1 / 16;
+            data[i + width * 4 + 5] += error * 1 / 16;
+            data[i + width * 4 + 6] += error * 1 / 16;
+          }
+        }
+      }
+    }
+    
+    return new ImageData(data, width, height);
+  }
+
+  private canvasToBitmap(): Uint8Array {
+    if (!this.canvas || !this.ctx) {
+      throw new Error('Canvas context not initialized');
+    }
+
+    const imageData = this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
+    const data = imageData.data;
+    const bitmap = new Uint8Array(Math.ceil(this.canvas.width * this.canvas.height / 8));
+
+    let byteIndex = 0;
+    let bitIndex = 0;
+
+    for (let y = 0; y < this.canvas.height; y++) {
+      for (let x = 0; x < this.canvas.width; x++) {
+        const i = (y * this.canvas.width + x) * 4;
+        // Since we've already dithered, just check if it's black (0) or white (255)
+        if (data[i] === 0) { // Black pixel
+          bitmap[byteIndex] |= (1 << (7 - bitIndex));
+        }
+
+        bitIndex++;
+        if (bitIndex === 8) {
+          bitIndex = 0;
+          byteIndex++;
+        }
+      }
+    }
+
+    return bitmap;
+  }
+
+  async feedPaper() {
+    try {
+      await this.ensureConnected(); // Ensure we're still connected before feeding
+      await this.sendCommand(COMMANDS.FEED_PAPER);
+      console.log('Feed paper command sent');
+    } catch (error) {
+      console.error('Error feeding paper:', error);
+      throw error;
+    }
+  }
+
+  async disconnect() {
+    if (this.device && this.device.gatt?.connected) {
+      await this.device.gatt.disconnect();
+    }
+    this.device = null;
+    this.characteristic = null;
+  }
+
+  isConnected(): boolean {
+    return this.device?.gatt?.connected ?? false;
+  }
+}
+
+export const printer = new BLEPrinter();
