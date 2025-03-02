@@ -150,3 +150,23 @@ button:disabled {
   margin-top: 0.5rem;
   font-size: 0.875rem;
 }
+
+.height-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 0;
+}
+
+.height-control label {
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.height-control input {
+  width: 80px;
+  padding: 5px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 14px;
+}

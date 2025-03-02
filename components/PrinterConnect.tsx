@@ -7,6 +7,7 @@ const PrinterConnect = () => {
   const [isConnected, setIsConnected] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [text, setText] = useState('');
+  const [height, setHeight] = useState(384); // Default height
 
   const connect = async () => {
     setIsLoading(true);
@@ -30,7 +31,7 @@ const PrinterConnect = () => {
     
     setIsLoading(true);
     try {
-      await printer.printText(text);
+      await printer.printText(text, height);
       setText(''); // Clear the input after successful print
     } catch (error) {
       console.error('Failed to print:', error);
@@ -71,6 +72,18 @@ const PrinterConnect = () => {
                 rows={4}
                 disabled={isLoading}
               />
+              <div className="height-control">
+                <label htmlFor="height">Height (px):</label>
+                <input
+                  id="height"
+                  type="number"
+                  min="0"
+                  max="800"
+                  value={height}
+                  onChange={(e) => setHeight(Math.max(0, Math.min(800, parseInt(e.target.value) || 384)))}
+                  disabled={isLoading}
+                />
+              </div>
               <button 
                 onClick={printText} 
                 disabled={isLoading || !text.trim()}
