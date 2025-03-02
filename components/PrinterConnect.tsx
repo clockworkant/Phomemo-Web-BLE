@@ -3,12 +3,18 @@
 import { useState } from 'react';
 import { printer } from '../utils/ble';
 
+const MM_TO_PX_RATIO = 0.82; // 1mm = 0.82 pixels
+
 const PrinterConnect = () => {
   const [isConnected, setIsConnected] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [text, setText] = useState('');
-  const [height, setHeight] = useState('384');
+  const [heightMM, setHeightMM] = useState('90'); // ~110px
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+
+  const convertMMtoPX = (mm: number): number => {
+    return Math.round(mm * MM_TO_PX_RATIO);
+  };
 
   const connect = async () => {
     setIsLoading(true);
@@ -33,7 +39,8 @@ const PrinterConnect = () => {
       setPreviewUrl(null);
       return;
     }
-    const preview = printer.getPreview(text, parseInt(height) || 384);
+    const heightPx = convertMMtoPX(parseInt(heightMM) || 90);
+    const preview = printer.getPreview(text, heightPx);
     setPreviewUrl(preview);
   };
 
@@ -42,8 +49,9 @@ const PrinterConnect = () => {
     
     setIsLoading(true);
     try {
-      await printer.printText(text, parseInt(height) || 384);
-      setText(''); // Clear the input after successful print
+      const heightPx = convertMMtoPX(parseInt(heightMM) || 90);
+      await printer.printText(text, heightPx);
+      setText('');
       setPreviewUrl(null);
     } catch (error) {
       console.error('Failed to print:', error);
@@ -85,12 +93,12 @@ const PrinterConnect = () => {
                 disabled={isLoading}
               />
               <div className="height-control">
-                <label htmlFor="height">Height (px):</label>
+                <label htmlFor="height">Height (mm):</label>
                 <input
                   id="height"
                   type="text"
-                  value={height}
-                  onChange={(e) => setHeight(e.target.value)}
+                  value={heightMM}
+                  onChange={(e) => setHeightMM(e.target.value)}
                   disabled={isLoading}
                 />
               </div>

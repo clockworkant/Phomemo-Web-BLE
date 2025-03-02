@@ -195,7 +195,7 @@ export class BLEPrinter {
     this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
     
     // Calculate optimal font size and line breaks
-    const { fontSize, lines } = this.calculateOptimalFontSize(text, this.PRINTER_WIDTH, height);
+    const { fontSize, lines } = this.calculateOptimalFontSize(text, this.PRINTER_WIDTH, height - 4); // Account for 2px lines
     
     // Configure text rendering
     this.ctx.fillStyle = 'black';
@@ -203,7 +203,7 @@ export class BLEPrinter {
     this.ctx.textBaseline = 'top';
     
     // Draw each line centered horizontally with minimal spacing
-    let y = 0;
+    let y = 2; // Start after top line
     lines.forEach(line => {
       const metrics = this.ctx.measureText(line);
       const x = (this.PRINTER_WIDTH - metrics.width) / 2;
@@ -217,6 +217,30 @@ export class BLEPrinter {
       const ditheredData = this.floydSteinbergDither(imageData);
       this.ctx.putImageData(ditheredData, 0, 0);
     }
+
+    // Draw top and bottom lines last
+    const imageData = this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
+    const data = imageData.data;
+
+    // Function to set a pixel black
+    const setPixelBlack = (x: number, y: number) => {
+      const index = (y * this.canvas.width + x) * 4;
+      data[index] = data[index + 1] = data[index + 2] = 0; // Black
+      data[index + 3] = 255; // Full opacity
+    };
+
+    // Draw top and bottom lines pixel by pixel, 2 pixels thick
+    for (let x = 0; x < this.canvas.width; x++) {
+      // Top line
+      setPixelBlack(x, 0);
+      setPixelBlack(x, 1);
+      // Bottom line
+      setPixelBlack(x, this.canvas.height - 2);
+      setPixelBlack(x, this.canvas.height - 1);
+    }
+
+    // Put the modified image data back
+    this.ctx.putImageData(imageData, 0, 0);
 
     return this.canvas;
   }
