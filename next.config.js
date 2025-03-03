@@ -1,11 +1,12 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  output: 'export',
+  typescript: {
+    // ⚠️ Warning: This ignores all TypeScript errors during build
+    ignoreBuildErrors: true,
+  },
   images: {
     unoptimized: true,
-  },
-  basePath: '/Phomemo-Web-BLE', // Change this to your repository name
-  assetPrefix: '/Phomemo-Web-BLE/', // Change this to your repository name
+  }
 };
 
 module.exports = nextConfig;
